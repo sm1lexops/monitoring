@@ -4,4 +4,4 @@
 
 ## Prometheus + Grafana
 
-![Prometheus + Grafana](assets/prometheus_grafana.png)
+[![Prometheus + Grafana](assets/prometheus_grafana.png)](prometheus_grafana/README.md)
