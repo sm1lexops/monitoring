@@ -1,4 +1,4 @@
-# Install Prometheus on Ubuntu 20.04 - 22.04
+# Install `Prometheus` on Ubuntu 20.04 - 22.04
 
 * First of all, let create a dedicated Linux user or sometimes called a system account for Prometheus. Having individual users for each service serves two main purposes:
 
@@ -248,6 +248,114 @@ promtool check config /etc/prometheus/prometheus.yml
 curl -X POST http://localhost:9090/-/reload
 ```
 
-* Check the targets section http://<ip>:9090/targets, you should see `active target`.
+* Check the targets section `http://<ip>:9090/targets`, you should see `active target`.
 
-## Install Grafana on Ubuntu 20.04 - 22.04
+* You also can check your `node_exporter` target metrics `http://<ip>:9100/metrics`
+
+## Install `Grafana` on Ubuntu 20.04 - 22.04
+
+*You can install `grafana` on dedicated server or container for distributed highload environment*
+
+* To visualize metrics we can use `Grafana`. There are many different data sources that `Grafana` supports, one of them is Prometheus.
+
+> Install dependencies for `Grafana`
+
+```sh
+sudo apt-get install -y apt-transport-https software-properties-common
+```
+
+> Add gpg key for verifications
+
+```sh
+wget -q -O - https://packages.grafana.com/gpg.key | sudo apt-key add -
+```
+
+> Add repo for stable releases
+
+```sh
+echo "deb https://packages.grafana.com/oss/deb stable main" | sudo tee -a /etc/apt/sources.list.d/grafana.list
+```
+
+> Update and install `Grafana`
+
+```sh
+sudo apt-get update
+sudo apt-get -y install grafana
+```
+
+* If you have any issues, you can download linux package from [Home page](https://grafana.com/grafana/download)
+
+> Download and install grafana packages
+
+```sh
+sudo apt-get install -y adduser libfontconfig1
+wget https://dl.grafana.com/enterprise/release/grafana-enterprise_9.5.3_amd64.deb
+sudo dpkg -i grafana-enterprise_9.5.3_amd64.deb
+```
+
+* Start and enable Grafana service.
+
+```sh
+sudo systemctl enable grafana-server
+
+sudo systemctl start grafana-server
+```
+
+> Check 
+
+```sh
+sudo systemctl status grafana-server
+```
+
+* Go to http://<ip>:3000 and log in to the Grafana using default credentials. The username is `admin`, and the password is `admin` as well.
+
+* When you log in for the first time, you get the option to change the password.
+
+* To visualize metrics, you need to add a data source first. Click Add data source and select Prometheus. For the URL, enter http://localhost:9090 and click Save and test. You can see Data source is working.
+
+> Best way to store all data source configurations add data source file as code.
+
+```sh
+sudo vim /etc/grafana/provisioning/datasources/datasources.yaml
+```
+
+> `datasources.yaml`
+
+```sh
+apiVersion: 1
+
+datasources:
+  - namer: Prometheus
+    type: Prometheus
+    url: http://localhost:9090
+    isDefault: true
+```
+
+> Restart `Grafana` services
+
+```sh
+sudo systemctl restart grafana-server
+```
+
+* Go back to Grafana and refresh the page. You should see the Prometheus data source.
+
+* We can import existing Grafana dashboards or create your own. Let's create a simple graph.
+
+* Go back to the Prometheus, and let's explore what metrics we have. Start typing `scrape_duration_seconds` and click `Execute`. This metric will show you the duration of the scrape of each Prometheus target. At this point, we have `node_exporter` and `prometheus` targets. We're going to use this metric to create a simple graph in Grafana.
+
+* Go to Grafana and click `create Dashboard` and then add a `new panel`.
+
+* Give a title Scrape Duration and paste `scrape_duration_seconds` metric. You can also reduce the time interval to 1 hour.
+
+* For the legend, we can use the `job` label and for the unit - seconds. There are a lot of configuration `parameters` that you can use. Let's keep it simple and click `apply` and save dashboard as Prometheus.
+
+* Since we already have Node Exporter, we can import an open-source dashboard to visualize CPU, Memory, Network, and a bunch of other metrics. You can search for node exporter on the Grafana website https://grafana.com/grafana/dashboards/.
+
+* Copy 1860 ID to Clipboard.
+
+* Now, in Grafana, you can click Import and paste this ID. Then load the dashboard. Select Prometheus datasource and click import.
+
+* You have all sorts of metrics here that come from node exporter.
+
+
+
