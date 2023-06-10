@@ -665,3 +665,100 @@ promtool check config /etc/prometheus/prometheus.yml
 curl -X POST -u admin:devops123 http://localhost:9090/-/reload
 ```
 
+* To check operations alertmanager, next we install `Pushgateway` for prometheus
+
+## Install Pushgateway Prometheus on Ubuntu 20.04 - 22.04
+
+* Next component that I want to install is Pushgateway. The Pushgateway is a service that allows you to push metrics from jobs that cannot be scrapped. For example, you can have Jenkins jobs or some kind of cron jobs. You can't scrape them since they are running for a limited time only.
+
+* The installation process is very similar to Prometheus and Node exporter.
+
+> Create user
+
+```sh
+sudo useradd \
+    --system \
+    --no-create-home \
+    --shell /bin/false pushgateway
+```
+
+> Download and extract archive with Pushgateway from https://prometheus.io/download/
+
+```sh
+wget https://github.com/prometheus/pushgateway/releases/download/v1.6.0/pushgateway-1.6.0.linux-amd64.tar.gz
+tar -xvf pushgateway-1.6.0.linux-amd64.tar.gz
+```
+
+> Move to `/usr/local/bin` and clean up dir
+
+```sh
+sudo mv pushgateway-1.4.2.linux-amd64/pushgateway /usr/local/bin/
+rm -rf pushgateway*
+```
+
+> Create systemd service `/etc/systemd/system/pushgateway.service`
+
+```sh
+[Unit]
+Description=Pushgateway
+Wants=network-online.target
+After=network-online.target
+
+StartLimitIntervalSec=500
+StartLimitBurst=5
+
+[Service]
+User=pushgateway
+Group=pushgateway
+Type=simple
+Restart=on-failure
+RestartSec=5s
+ExecStart=/usr/local/bin/pushgateway
+
+[Install]
+WantedBy=multi-user.target
+```
+
+> Enable and start pushgateway
+
+```sh
+sudo systemctl enable pushgateway
+sudo systemctl start pushgateway
+sudo systemctl status pushgateway
+```
+
+* Pushgateway can be reachible at `http://<ip>:9091`.
+
+> Add target to `/etc/prometheus/prometheus.yml`
+
+```yml
+...
+  - job_name: pushgateway
+    honor_labels: true
+    static_configs:
+      - targets: ["localhost:9091"]
+```
+
+> Reload prometheus
+
+```sh
+promtool check config /etc/prometheus/prometheus.yml
+curl -X POST http://localhost:9090/-/reload
+```
+
+* Trigger the alert by sending the new metric to Prometheus Pushgateway.
+
+```sh
+echo "jenkins_job_duration_seconds 31.87" | curl --data-binary @- http://localhost:9091/metrics/job/backup
+```
+
+* In a minute or so, you should get a message in Slack.
+
+* If we send a new metric with a duration of less than 30 seconds, Prometheus will resolve the alert
+
+```sh
+echo "jenkins_job_duration_seconds 11.87" | curl --data-binary @- http://localhost:9091/metrics/job/backup
+```
+
+
+
