@@ -357,5 +357,311 @@ sudo systemctl restart grafana-server
 
 * You have all sorts of metrics here that come from node exporter.
 
+## Securing Prometheus with Basic Authorization
 
+* When you install Prometheus, it will be open to anyone who knows the endpoint. Fairly recently, Prometheus introduced a way to add basic authentication to each HTTP request. Used to be you had to install a proxy such as nginx at the front of Prometheus and configure basic auth there. Now you can use a built-in authentication mechanism to the Prometheus itself.
+
+* Let's install the `bcrypt` python module to create a hash of the password. Prometheus will not store your passwords; it will compute the hash and compare it with the existing one for the given user.
+
+```sh
+sudo apt-get -y install python3-bcrypt
+```
+
+> Create simple script for `gen_password.py`, before that you'll need installed `python`
+
+```py
+import getpass
+import bcrypt
+
+password = getpass.getpass("password: ")
+hashed_password = bcrypt.hashpw(password.encode("utf-8"), bcrypt.gensalt())
+print(hashed_password.decode())
+```
+
+```sh
+python3 gen_password.py
+```
+
+* Copy this hash and create an additional Prometheus configuration file.
+
+```sh
+sudo vim /etc/prometheus/web.yml
+```
+
+> `web.yml`
+
+```yml
+...
+
+basic_auth_users:
+    admin: $2b$12$CVcceMyfix1Qa7Kupisfe.JVHXG.U4PWFUculUnGlxPrTlBxfNGRe
+```
+
+* Update the systemd service definition and add next code.
+
+```sh
+...
+ExecStart=/usr/local/bin/prometheus \
+  ...
+  --web.config.file=/etc/prometheus/web.yml
+```
+
+* Update the Grafana datasource `/etc/grafana/provisioning/datasources/datasources.yaml` to provide a username and password.
+
+```yml
+---
+apiVersion: 1
+
+datasources:
+  - name: Prometheus
+    type: prometheus
+    url: http://localhost:9090
+    isDefault: true
+    basicAuth: true
+    basicAuthUser: admin
+    secureJsonData:
+      basicAuthPassword: <your password>
+```
+
+* Reload `systemd` and restart `prometheus`
+
+```sh
+sudo systemctl daemon-reload
+sudo systemctl restart prometheus
+sudo systemctl status prometheus
+```
+
+* If you go to the targets section, you will see that the Prometheus target is `down`. Prometheus requires a `username` and `password` to scrape itself as well. So let's update the Prometheus target.
+
+> `prometheus.yml`
+
+```sh
+...
+  - job_name: "prometheus"
+    basic_auth:
+      username: admin
+      password: <your password>
+    static_configs:
+      - targets: ["localhost:9090"]
+```
+
+* Check the Prometheus config and reload the config.
+
+```sh
+promtool check config /etc/prometheus/prometheus.yml
+curl -X POST -u admin:<your password> http://localhost:9090/-/reload
+```
+
+* Verify that Prometheus target is `UP` in the UI.
+
+## Install Alertmanager on Ubuntu 20.04 - 22.04
+
+* To send alerts, we're going to use `Alertmanager`. It takes care of deduplicating, grouping, and routing them to the correct receiver integration such as [Alertmanager Webhook Receiver](https://prometheus.io/docs/operating/integrations/). You can set up multiple Alertmanagers to achieve high availability.
+
+> Create a system user for Alertmanager.
+
+```sh
+sudo useradd \
+  --system \
+  --no-create-home \
+  --shell /bin/false alertmanager
+```
+
+* For Alertmanager, we need storage. It is mandatory (it defaults to "data/") and is used to store Alertmanager's notification states and silences. Without this state (or if you wipe it), Alertmanager would not know across restarts what silences were created or what notifications were already sent.
+
+> Create directory
+
+```sh
+sudo mkdir -p /alertmanager-data /etc/alertmanager
+```
+
+> Download and tar archive
+
+```sh
+wget https://github.com/prometheus/alertmanager/releases/download/v0.25.0/alertmanager-0.25.0.linux-amd64.tar.gz
+
+tar -xvf alertmanager-0.25.0.linux-amd64.tar.gz
+```
+
+> Let's move Alermanager's binary to the local bin and copy sample config, clean up after.
+
+```sh
+sudo mv alertmanager-0.25.0.linux-amd64/alertmanager /usr/local/bin/
+sudo mv alertmanager-0.25.0.linux-amd64/alertmanager.yml /etc/alertmanager/
+
+rm -rf alertmanager*
+```
+
+> Check version and man
+
+```sh
+alertmanager --version
+alertmanager --help
+```
+
+* Create `sudo vim /etc/systemd/system/alertmanager.service`
+
+```sh
+[Unit]
+Description=Alertmanager
+Wants=network-online.target
+After=network-online.target
+
+StartLimitIntervalSec=500
+StartLimitBurst=5
+
+[Service]
+User=alertmanager
+Group=alertmanager
+Type=simple
+Restart=on-failure
+RestartSec=5s
+ExecStart=/usr/local/bin/alertmanager \
+  --storage.path=/alertmanager-data \
+  --config.file=/etc/alertmanager/alertmanager.yml
+
+[Install]
+WantedBy=multi-user.target
+```
+
+> Enable alertmanager, start and check
+
+```sh
+sudo systemctl enable alertmanager
+sudo systemctl start alertmanager
+sudo systemctl status alertmanager
+```
+
+* Alertmanager will be exposed on port 9093 `http://<ip>:9093`.
+
+* Create a simple alert. In almost all Prometheus setups, you have an alert that is always active. It is used to validate the monitoring system itself. For example, it can be integrated with the deadmanssnitch service. If something goes wrong with the Prometheus or Alertmanager and, you will get an emergency notification that your monitoring system is down. It's a very useful service, especially in production environments.
+
+* Create alert but without integration with DeadMansSnitch.
+
+> `/etc/prometheus/dead-mans-snitch-rule.yml`
+
+```sh
+...
+
+---
+groups:
+- name: dead-mans-snitch
+  rules:
+  - alert: DeadMansSnitch
+    annotations:
+      message: This alert is integrated with DeadMansSnitch.
+    expr: vector(1)
+```
+
+> Update the Prometheus `/etc/prometheus/prometheus.yml` to specify the location of Alertmanager and specify the path to the new rule.
+
+```yml
+...
+alerting:
+  alertmanagers:
+    - static_configs:
+        - targets:
+          - localhost:9093
+rule_files:
+  - dead-mans-snitch-rule.yml
+```
+
+> Check and restart
+
+```sh
+promtool check config /etc/prometheus/prometheus.yml
+sudo systemctl restart prometheus
+sudo systemctl status prometheus
+```
+
+## Alertmanager Slack Channel Integration
+
+*You can integrate `alertmanager` with various of [Alertmanager Webhook Receivers](https://prometheus.io/docs/operating/integrations/#alertmanager-webhook-receiver)*
+
+* Let's create alerts Slack channel.
+
+* Create a new Slack app from scratch. Give it a name Prometheus and select a workspace.
+
+* You can modify the app from the basic information. Let's upload the Prometheus icon.
+
+* Next, we need to enable incoming webhooks. Then add webhook to the workspace.
+
+* The last thing, we need to copy Webhook URL and use it in Alertmanager config.
+
+* Now, update `alertmanager.yml` config to include a new route to send alerts to the Slack
+
+> `/etc/alertmanager/alertmanager.yml`
+
+```yml
+---
+route:
+  group_by: ['alertname']
+  group_wait: 30s
+  group_interval: 5m
+  repeat_interval: 1h
+  receiver: 'web.hook'
+  routes:
+  - receiver: slack-notifications
+    match:
+      severity: warning
+receivers:
+- name: 'web.hook'
+  webhook_configs:
+  - url: 'http://127.0.0.1:5001/'
+- name: slack-notifications
+  slack_configs:
+  - channel: "#alerts"
+    send_resolved: true
+    api_url: "https://hooks.slack.com/services/<id>"
+    title: "{{ .GroupLabels.alertname }}"
+    text: "{{ range .Alerts }}{{ .Annotations.message }}\n{{ end }}"
+inhibit_rules:
+  - source_match:
+      severity: 'critical'
+    target_match:
+      severity: 'warning'
+    equal: ['alertname', 'dev', 'instance']
+```
+
+> Restart `alertmanager`
+
+```sh
+sudo systemctl restart alertmanager
+sudo systemctl status alertmanager
+```
+
+ * Create a new alert rule to test Slack integration.
+
+ > `/etc/prometheus/batch-job-rules.yml`
+
+ ```yml
+...
+
+groups:
+- name: batch-job-rules
+  rules:
+  - alert: JenkinsJobExceededThreshold
+    annotations:
+      message: Jenkins job exceeded a threshold of 30 seconds.
+    expr: jenkins_job_duration_seconds{job="backup"} > 30
+    for: 1m
+    labels:
+      severity: warning
+```
+
+> Add a new rule to `prometheus.yml`
+
+```yml
+...
+rule_files:
+  - dead-mans-snitch-rule.yml
+  - batch-job-rules.yml
+```
+
+* Check the config and reload Prometheus.
+
+```sh
+promtool check config /etc/prometheus/prometheus.yml
+curl -X POST -u admin:devops123 http://localhost:9090/-/reload
+```
 
